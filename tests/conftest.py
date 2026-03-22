@@ -6,6 +6,7 @@ import hashlib
 import pytest
 import factory
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 from datetime import timedelta
 
@@ -26,7 +27,7 @@ class UserFactory(factory.django.DjangoModelFactory):
 
     username = factory.Sequence(lambda n: f"user_{n}")
     email = factory.LazyAttribute(lambda obj: f"{obj.username}@example.com")
-    password = factory.PostGenerationMethodCall("set_password", "testpass123")
+    password = factory.LazyFunction(lambda: make_password("testpass123"))
     role = "technician"
     is_suspended = False
 
