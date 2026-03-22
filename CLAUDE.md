@@ -117,7 +117,7 @@ Output is always `ParsedBoard` — unified model regardless of input format.
 |---|---|---|
 | `brd_landrex.py` | Landrex `.brd` (binary encoded) | ✅ Complete |
 | `brd2.py` | TOPTEST `.brd` (plain text) | ✅ Complete |
-| `bv.py` | `.bv` / `.bvr` | ❌ Not built |
+| `bv.py` | `.bv` / `.bvr` (BRDVIEW 4 format) | ✅ Complete |
 | `fz.py` | `.fz` XOR-encrypted (Asus) | ❌ Not built |
 | `asc.py` | `.asc` plain ASCII | ❌ Not built |
 
@@ -245,6 +245,7 @@ FRONTEND_URL=http://localhost:5173
 - `apps/accounts/views.py` — Password reset: `POST /api/auth/password/reset/` + `POST /api/auth/password/reset/confirm/` (Django token generator, frontend-linked email)
 - `apps/boards/parsers/brd_landrex.py` — Landrex binary format, fully reverse-engineered, 27/27 tests passing (7512 parts, 25497 pins, 4186 nets on 820-01700)
 - `apps/boards/parsers/brd2.py` — TOPTEST plain-text format
+- `apps/boards/parsers/bv.py` — BV/BVR BRDVIEW 4 format (32/32 tests passing)
 - `apps/boards/views.py` — Board list, detail, view endpoint (full auth chain + Redis cache)
 - `apps/boards/storage.py` — S3 + local dev fallback
 - `apps/admin_panel/views.py` — All admin endpoints (board upload, user mgmt, analytics)
@@ -256,7 +257,6 @@ FRONTEND_URL=http://localhost:5173
 - `tests/` — conftest with factories, board view tests (22 cases), parser tests (13 cases), billing tests (15 cases)
 
 ### 🔴 Next Priority
-- `apps/boards/parsers/bv.py` — BV/BVR format parser (P1 priority)
 - Annotation endpoints (models exist, views stubbed)
 - `apps/billing/` — Plan seed data migration
 
