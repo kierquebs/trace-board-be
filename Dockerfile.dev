@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Dev-only image.
+# Source code is mounted as a volume (not copied) so edits hot-reload.
+# Uses dev requirements (includes debug toolbar, ipython, pytest, etc.)
+# Do NOT use this image in production.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# System deps needed to compile psycopg2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps directly into the system site-packages.
+# (no --prefix trick — keeps celery, django-admin, gunicorn all on $PATH)
+COPY requirements/base.txt requirements/dev.txt ./requirements/
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir -r requirements/dev.txt
+
+ENV DJANGO_SETTINGS_MODULE=config.settings.dev \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Source is bind-mounted at runtime — no COPY needed here
+EXPOSE 8000

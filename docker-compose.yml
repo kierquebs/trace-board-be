@@ -1,0 +1,126 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NailTrace — local development stack
+#
+# Quick start:
+#   cp .env.example .env
+#   docker compose build
+#   docker compose up
+#   docker compose exec web python manage.py migrate
+#   docker compose exec web python manage.py createsuperuser
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-django-env: &django-env
+  DJANGO_SETTINGS_MODULE: config.settings.dev
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-secret-key-change-in-prod}
+  POSTGRES_DB: ${POSTGRES_DB:-traceboard}
+  POSTGRES_USER: ${POSTGRES_USER:-traceboard}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-traceboard}
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  REDIS_URL: redis://redis:6379/0
+  AWS_REGION: ${AWS_REGION:-ap-southeast-1}
+  AWS_STORAGE_BUCKET_NAME: ${AWS_STORAGE_BUCKET_NAME:-}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  PAYMONGO_SECRET_KEY: ${PAYMONGO_SECRET_KEY:-}
+  PAYMONGO_PUBLIC_KEY: ${PAYMONGO_PUBLIC_KEY:-}
+  PAYMONGO_WEBHOOK_SECRET: ${PAYMONGO_WEBHOOK_SECRET:-}
+
+services:
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-traceboard}
+      POSTGRES_USER: ${POSTGRES_USER:-traceboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-traceboard}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-traceboard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6371:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: traceboard-dev
+    working_dir: /app
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      <<: *django-env
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    image: traceboard-dev
+    working_dir: /app
+    command: >
+      celery -A config.celery worker
+        --loglevel=info
+        --concurrency=2
+        --queues=celery
+        --hostname=worker@%h
+    environment:
+      <<: *django-env
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_started
+    restart: unless-stopped
+
+  flower:
+    image: traceboard-dev
+    working_dir: /app
+    command: >
+      celery -A config.celery flower
+        --port=5555
+        --broker=redis://redis:6379/0
+    environment:
+      <<: *django-env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - worker
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+  redis_data:
