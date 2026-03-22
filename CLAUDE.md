@@ -259,7 +259,11 @@ FRONTEND_URL=http://localhost:5173
 - `apps/billing/views.py` — Real PayMongo checkout (`_create_paymongo_checkout`, 502 on error) + subscription activation on `payment.paid` webhook (`_handle_payment_paid` upserts Subscription + Payment)
 - `apps/boards/management/commands/seed_board.py` — Load local .brd file for dev
 - `apps/billing/management/commands/seed_plans.py` — Seed Starter/Pro/Shop plans
-- `tests/` — conftest with factories, board view tests (22 cases), parser tests (13 cases), billing tests (15 cases)
+- `tests/` — conftest with factories, board view tests (22 cases), parser tests (13 cases), billing tests (15 cases). All tests passing, zero warnings.
+
+### Test fixture notes (`tests/conftest.py`)
+- `UserFactory` uses `skip_postgeneration_save = True` (factory_boy ≥ 3.3 requirement). Password is set via `LazyFunction(make_password("testpass123"))` — **not** `PostGenerationMethodCall` — so the hashed value is persisted in the initial `CREATE` without needing a post-save.
+- When mocking `cache.get` in board view tests, always use `side_effect` keyed on `board.redis_cache_key` rather than a blanket `return_value`. `BoardViewRateThrottle` also calls `cache.get` and will crash with `KeyError: -1` if it receives an unexpected dict.
 
 ### 🔴 Next Priority
 - Annotation endpoints (models exist, views stubbed)

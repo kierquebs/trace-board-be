@@ -2,9 +2,11 @@
 Shared pytest fixtures and factory definitions.
 Available in all test modules without explicit import.
 """
+import hashlib
 import pytest
 import factory
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.utils import timezone
 from datetime import timedelta
 
@@ -21,10 +23,11 @@ User = get_user_model()
 class UserFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = User
+        skip_postgeneration_save = True
 
     username = factory.Sequence(lambda n: f"user_{n}")
     email = factory.LazyAttribute(lambda obj: f"{obj.username}@example.com")
-    password = factory.PostGenerationMethodCall("set_password", "testpass123")
+    password = factory.LazyFunction(lambda: make_password("testpass123"))
     role = "technician"
     is_suspended = False
 
@@ -72,7 +75,7 @@ class BoardFileFactory(factory.django.DjangoModelFactory):
     category = "cellphone"
     status = BoardStatus.ENABLED
     s3_key = factory.Sequence(lambda n: f"boards/abc12345/board_{n}.brd")
-    content_hash = factory.Sequence(lambda n: f"{'a' * 63}{n}")
+    content_hash = factory.Sequence(lambda n: hashlib.sha256(str(n).encode()).hexdigest())
     file_size = 102400
     format = "brd2"
     parse_status = "success"
