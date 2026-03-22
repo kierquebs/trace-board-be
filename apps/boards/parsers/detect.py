@@ -12,13 +12,17 @@ from pathlib import Path
 class BoardFormat(str, Enum):
     BRD2 = "brd2"               # TOPTEST plain-text .brd
     BRD_LANDREX = "brd_landrex" # Landrex binary-encoded .brd
-    BV = "bv"                   # .bv / .bvr text format
+    BV = "bv"                   # .bv / .bvr text format (BRDVIEW)
+    BV_MDB = "bv_mdb"           # .bv / .bvr Microsoft Access JET database
     FZ = "fz"                   # .fz XOR-encrypted (Asus)
     ASC = "asc"                 # Plain ASCII
     CAD = "cad"                 # GenCAD
     CST = "cst"                 # CAST/Samsung
     UNKNOWN = "unknown"
 
+
+# JET/MDB magic — "Standard Jet DB" appears at byte offset 4
+_BV_MDB_MAGIC = b"Standard Jet DB"
 
 # Magic bytes / text markers for each format
 _BRD2_MARKERS = (
@@ -64,6 +68,9 @@ def detect_format(file_bytes: bytes, filename: str) -> BoardFormat:
         return BoardFormat.CST
 
     if ext in (".bv", ".bvr"):
+        # Distinguish JET/MDB binary .bv from plain-text BRDVIEW .bv
+        if _BV_MDB_MAGIC in file_bytes[:32]:
+            return BoardFormat.BV_MDB
         return BoardFormat.BV
 
     # -----------------------------------------------------------------

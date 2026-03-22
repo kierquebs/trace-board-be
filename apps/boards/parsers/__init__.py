@@ -69,6 +69,12 @@ def _load_registry() -> dict:
         pass
 
     try:
+        from . import bv_mdb
+        registry[BoardFormat.BV_MDB] = bv_mdb.parse
+    except ImportError:
+        pass
+
+    try:
         from . import fz
         registry[BoardFormat.FZ] = fz.parse
     except ImportError:

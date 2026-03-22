@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
         curl \
+        mdbtools \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps directly into the system site-packages.
