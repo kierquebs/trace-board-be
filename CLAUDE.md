@@ -233,6 +233,7 @@ AWS_SECRET_ACCESS_KEY=
 PAYMONGO_SECRET_KEY=sk_test_
 PAYMONGO_PUBLIC_KEY=pk_test_
 PAYMONGO_WEBHOOK_SECRET=
+FRONTEND_URL=http://localhost:5173
 ```
 
 ---
@@ -241,25 +242,27 @@ PAYMONGO_WEBHOOK_SECRET=
 
 ### ✅ Done
 - `apps/accounts` — User model, custom JWT login (returns role + subscription in response + token claims), register, logout, permissions
+- `apps/accounts/views.py` — Password reset: `POST /api/auth/password/reset/` + `POST /api/auth/password/reset/confirm/` (Django token generator, frontend-linked email)
 - `apps/boards/parsers/brd_landrex.py` — Landrex binary format, fully reverse-engineered, 27/27 tests passing (7512 parts, 25497 pins, 4186 nets on 820-01700)
 - `apps/boards/parsers/brd2.py` — TOPTEST plain-text format
 - `apps/boards/views.py` — Board list, detail, view endpoint (full auth chain + Redis cache)
 - `apps/boards/storage.py` — S3 + local dev fallback
 - `apps/admin_panel/views.py` — All admin endpoints (board upload, user mgmt, analytics)
 - `apps/billing/models.py` — Plan, Subscription, Payment models
+- `apps/billing/paymongo.py` — PayMongo Checkout Session API client (Basic auth, user/plan metadata for webhook correlation)
+- `apps/billing/views.py` — Real PayMongo checkout (`_create_paymongo_checkout`, 502 on error) + subscription activation on `payment.paid` webhook (`_handle_payment_paid` upserts Subscription + Payment)
 - `apps/boards/management/commands/seed_board.py` — Load local .brd file for dev
 - `apps/billing/management/commands/seed_plans.py` — Seed Starter/Pro/Shop plans
-- `tests/` — conftest with factories, board view tests (22 cases), parser tests (13 cases)
+- `tests/` — conftest with factories, board view tests (22 cases), parser tests (13 cases), billing tests (15 cases)
 
 ### 🔴 Next Priority
-- `apps/billing/views.py` — `_create_paymongo_checkout()` is a placeholder, needs real PayMongo Checkout Session API call
-- `apps/billing/views.py` — `_handle_payment_paid()` creates Payment but never activates Subscription
-- Password reset endpoints (`apps/accounts/`)
+- `apps/boards/parsers/bv.py` — BV/BVR format parser (P1 priority)
+- Annotation endpoints (models exist, views stubbed)
+- `apps/billing/` — Plan seed data migration
 
 ### 🟡 After That
-- `apps/boards/parsers/bv.py` — BV/BVR format parser (P1 priority)
-- `apps/billing/` — Plan seed data migration
-- Annotation endpoints (models exist, views stubbed)
+- `apps/boards/parsers/fz.py` — FZ XOR-encrypted (Asus) format
+- `apps/boards/parsers/asc.py` — ASC plain ASCII format
 
 ---
 
