@@ -28,6 +28,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         curl \
+        mdbtools \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
