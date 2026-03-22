@@ -30,8 +30,8 @@ _BRD2_MARKERS = (
 
 _BV_MARKERS = (
     b"BRDVIEW",
-    b"board_file",
-    b"format bv",
+    b"BOARD_FILE",
+    b"FORMAT BV",
 )
 
 _CAD_MARKERS = (
