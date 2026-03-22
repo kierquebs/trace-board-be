@@ -10,9 +10,10 @@ POST /api/billing/webhooks/paymongo/  — PayMongo webhook (no auth)
 import hashlib
 import hmac
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.utils import timezone as dj_timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -20,10 +21,15 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+import requests as http_requests
+
 from apps.accounts.permissions import IsTechnician
 
+from . import paymongo
 from .models import Payment, Plan, Subscription
 from .serializers import PlanSerializer, SubscriptionSerializer, SubscribeSerializer
+
+User = get_user_model()
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +75,14 @@ class SubscribeView(APIView):
         except Subscription.DoesNotExist:
             pass
 
-        # TODO: Call PayMongo API to create payment link
-        # For now, return a placeholder response structure
-        # Full PayMongo integration implemented in billing/paymongo.py
-        checkout_url = _create_paymongo_checkout(request.user, plan)
+        try:
+            checkout_url = _create_paymongo_checkout(request.user, plan)
+        except http_requests.HTTPError as exc:
+            logger.error("PayMongo checkout error for user %s: %s", request.user.pk, exc)
+            return Response(
+                {"error": "Payment gateway error. Please try again later."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         return Response(
             {
@@ -179,19 +189,49 @@ class PayMongoWebhookView(APIView):
         """Create Payment record and activate/extend subscription."""
         attrs = payload["data"]["attributes"]
         pm_id = payload["data"]["id"]
-        amount_centavos = attrs.get("amount", 0)
-        amount_php = amount_centavos / 100
+        metadata = attrs.get("metadata") or {}
+        user_id = metadata.get("user_id")
+        plan_slug = metadata.get("plan_slug")
 
-        # Upsert payment record
+        user = User.objects.filter(pk=user_id).first()
+        plan = Plan.objects.filter(slug=plan_slug).first()
+        if not user or not plan:
+            logger.error(
+                "payment.paid: cannot resolve user %s / plan %s — skipping activation",
+                user_id,
+                plan_slug,
+            )
+            return
+
+        now = dj_timezone.now()
+        period_end = now + timedelta(days=30)
+        payment_method = attrs.get("source", {}).get("type", "")
+
+        sub, _ = Subscription.objects.update_or_create(
+            user=user,
+            defaults={
+                "plan": plan,
+                "status": Subscription.Status.ACTIVE,
+                "current_period_start": now,
+                "current_period_end": period_end,
+                "payment_method": payment_method,
+            },
+        )
+
         Payment.objects.update_or_create(
             paymongo_payment_id=pm_id,
             defaults={
-                "amount_php": amount_php,
+                "subscription": sub,
+                "user": user,
+                "amount_php": attrs.get("amount", 0) / 100,
                 "status": Payment.PaymentStatus.PAID,
-                "payment_method": attrs.get("source", {}).get("type", ""),
+                "payment_method": payment_method,
+                "period_start": now,
+                "period_end": period_end,
                 "raw_webhook_data": payload,
             },
         )
+        logger.info("Activated subscription for user %s (plan=%s)", user.pk, plan_slug)
 
     def _handle_payment_failed(self, payload: dict) -> None:
         pm_id = payload["data"]["id"]
@@ -212,10 +252,9 @@ class PayMongoWebhookView(APIView):
 
 def _create_paymongo_checkout(user, plan: Plan) -> str:
     """
-    Placeholder — will call PayMongo Checkout Session API.
-    Returns a redirect URL for the client.
+    Create a PayMongo Checkout Session and return the redirect URL.
+    Raises requests.HTTPError on API failure.
     """
-    # TODO: Implement PayMongo API call
-    # import requests
-    # response = requests.post("https://api.paymongo.com/v1/checkout_sessions", ...)
-    return f"https://checkout.paymongo.com/placeholder?plan={plan.slug}"
+    success_url = f"{settings.FRONTEND_URL}/billing/success"
+    cancel_url = f"{settings.FRONTEND_URL}/billing/cancel"
+    return paymongo.create_checkout_session(user, plan, success_url, cancel_url)

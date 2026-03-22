@@ -1,4 +1,8 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.core.mail import send_mail
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
@@ -9,7 +13,15 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .serializers import ChangePasswordSerializer, RegisterSerializer, UserProfileSerializer
+from django.conf import settings
+
+from .serializers import (
+    ChangePasswordSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    RegisterSerializer,
+    UserProfileSerializer,
+)
 
 User = get_user_model()
 
@@ -203,3 +215,86 @@ class LogoutView(APIView):
         except Exception:
             pass  # Already blacklisted or invalid — still return success
         return Response({'data': {'detail': 'Logged out successfully.'}})
+
+
+# ── Password reset ──────────────────────────────────────────────────────────────
+
+_token_generator = PasswordResetTokenGenerator()
+
+
+class PasswordResetRequestView(APIView):
+    """
+    POST /api/auth/password/reset/
+
+    Body: { "email": "user@example.com" }
+
+    Sends a password reset link to the email address if it exists.
+    Always returns success to prevent user enumeration.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+
+        try:
+            user = User.objects.get(email__iexact=email)
+        except User.DoesNotExist:
+            # Silent success — don't reveal whether email exists
+            return Response({'data': {'detail': 'If that email exists, a reset link has been sent.'}})
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = _token_generator.make_token(user)
+        reset_url = f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
+
+        send_mail(
+            subject='TraceBoard — Reset your password',
+            message=(
+                f'Hi {user.username},\n\n'
+                f'Click the link below to reset your TraceBoard password:\n\n'
+                f'{reset_url}\n\n'
+                f'This link expires in 24 hours. If you did not request a reset, ignore this email.'
+            ),
+            from_email=None,  # Uses DEFAULT_FROM_EMAIL from settings
+            recipient_list=[user.email],
+            fail_silently=True,
+        )
+
+        return Response({'data': {'detail': 'If that email exists, a reset link has been sent.'}})
+
+
+class PasswordResetConfirmView(APIView):
+    """
+    POST /api/auth/password/reset/confirm/
+
+    Body: { "uid": "...", "token": "...", "new_password": "..." }
+
+    Validates the token and sets the new password.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            pk = force_str(urlsafe_base64_decode(serializer.validated_data['uid']))
+            user = User.objects.get(pk=pk)
+        except (User.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {'error': 'Invalid or expired reset link.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not _token_generator.check_token(user, serializer.validated_data['token']):
+            return Response(
+                {'error': 'Invalid or expired reset link.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(serializer.validated_data['new_password'])
+        user.save(update_fields=['password'])
+        return Response({'data': {'detail': 'Password reset successfully.'}})
