@@ -117,9 +117,13 @@ Output is always `ParsedBoard` — unified model regardless of input format.
 |---|---|---|
 | `brd_landrex.py` | Landrex `.brd` (binary encoded) | ✅ Complete |
 | `brd2.py` | TOPTEST `.brd` (plain text) | ✅ Complete |
-| `bv.py` | `.bv` / `.bvr` (BRDVIEW 4 format) | ✅ Complete |
+| `bv.py` | `.bv` / `.bvr` (BRDVIEW 4 plain-text format) | ✅ Complete |
+| `bv_mdb.py` | `.bv` / `.bvr` (Microsoft Access JET database) | ✅ Complete |
 | `fz.py` | `.fz` XOR-encrypted (Asus) | ❌ Not built |
 | `asc.py` | `.asc` plain ASCII | ❌ Not built |
+
+> Detection: `.bv` / `.bvr` files are auto-routed by content — JET magic bytes (`Standard Jet DB`) → `bv_mdb`, otherwise → `bv`.
+> `bv_mdb` requires `mdbtools` system package (included in both Dockerfiles).
 
 ### Landrex decode formula
 ```python
@@ -246,6 +250,7 @@ FRONTEND_URL=http://localhost:5173
 - `apps/boards/parsers/brd_landrex.py` — Landrex binary format, fully reverse-engineered, 27/27 tests passing (7512 parts, 25497 pins, 4186 nets on 820-01700)
 - `apps/boards/parsers/brd2.py` — TOPTEST plain-text format
 - `apps/boards/parsers/bv.py` — BV/BVR BRDVIEW 4 format (32/32 tests passing)
+- `apps/boards/parsers/bv_mdb.py` — BV/BVR Microsoft Access JET database format (auto-detected via magic bytes; uses `mdbtools`). Tested on MBP820-2054.bv: 1933 parts, 10052 pins, 2106 nets, 1496 nails
 - `apps/boards/views.py` — Board list, detail, view endpoint (full auth chain + Redis cache)
 - `apps/boards/storage.py` — S3 + local dev fallback
 - `apps/admin_panel/views.py` — All admin endpoints (board upload, user mgmt, analytics)
