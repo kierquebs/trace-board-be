@@ -21,9 +21,8 @@ from rest_framework.views import APIView
 from apps.accounts.permissions import CanViewBoard, HasActiveSubscription
 
 from .models import BoardFile, BoardStatus, ParseStatus
-from .parsers import parse_board_file
 from .serializers import BoardFileDetailSerializer, BoardFileListSerializer
-from .storage import read_board_file
+from .tasks import parse_board_task
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +121,7 @@ class BoardViewEndpoint(APIView):
 
     Flow:
       1. Check Redis cache (hit → return immediately)
-      2. Cache miss → read S3 bytes → parse → cache → return
+      2. Cache miss → dispatch Celery reparse task → return 202 (UI polls)
 
     NEVER returns raw file bytes, s3_key, or anything that could
     be used to reconstruct the original board file.
@@ -159,39 +158,16 @@ class BoardViewEndpoint(APIView):
             board.record_view()
             return Response({"data": cached})
 
-        # Cache miss — re-parse from S3
-        # (should rarely happen in production since we parse on upload)
+        # Cache miss — dispatch async reparse rather than blocking the request.
+        # This keeps response time fast; the UI polls on 202 until the cache is warm.
         logger.warning(
-            "Cache miss for board %d (%s) — re-parsing from S3",
+            "Cache miss for board %d (%s) — dispatching async reparse",
             board.pk,
             board.original_filename,
         )
-
-        try:
-            file_bytes = read_board_file(board.s3_key)
-        except Exception as exc:
-            logger.error("S3 read failed for board %d: %s", board.pk, exc)
-            return Response(
-                {"error": "Could not retrieve board file. Please try again."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
-        result = parse_board_file(file_bytes, board.original_filename)
-        if not result.success:
-            return Response(
-                {"error": "Board parse failed. Please contact support."},
-                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
-
-        board_json = result.board.to_json()
-
-        # Refresh Redis cache
-        from django.conf import settings
-        cache.set(
-            board.redis_cache_key,
-            board_json,
-            timeout=getattr(settings, "BOARD_PARSE_CACHE_TTL", 604800),
+        board.mark_parsing()
+        parse_board_task.delay(board.pk)
+        return Response(
+            {"error": "Board data is being prepared. Check back shortly."},
+            status=status.HTTP_202_ACCEPTED,
         )
-
-        board.record_view()
-        return Response({"data": board_json})

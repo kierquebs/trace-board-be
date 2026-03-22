@@ -154,3 +154,18 @@ class TestBoardView:
         with patch("django.core.cache.cache.get", side_effect=_cache_get):
             res = admin_client.get(self._url(disabled_board.pk))
         assert res.status_code == 200
+
+    def test_cache_miss_dispatches_async_reparse_and_returns_202(
+        self, technician_client, enabled_board
+    ):
+        """Cache miss must NOT block the request — dispatches Celery task and returns 202."""
+        with (
+            patch("django.core.cache.cache.get", return_value=None),
+            patch("apps.boards.views.parse_board_task") as mock_task,
+        ):
+            res = technician_client.get(self._url(enabled_board.pk))
+
+        assert res.status_code == 202
+        mock_task.delay.assert_called_once_with(enabled_board.pk)
+        enabled_board.refresh_from_db()
+        assert enabled_board.parse_status == "parsing"
