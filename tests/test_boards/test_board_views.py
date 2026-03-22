@@ -83,7 +83,12 @@ class TestBoardView:
             "nets": [],
         }
 
-        with patch("django.core.cache.cache.get", return_value=mock_board_json):
+        def _cache_get(key, default=None):
+            if key == enabled_board.redis_cache_key:
+                return mock_board_json
+            return default
+
+        with patch("django.core.cache.cache.get", side_effect=_cache_get):
             res = technician_client.get(self._url(enabled_board.pk))
 
         assert res.status_code == 200
@@ -98,7 +103,12 @@ class TestBoardView:
         mock_json = {"format": "brd2", "width": 100, "height": 100,
                      "outline": [], "parts": [], "pins": [], "nails": [], "nets": []}
 
-        with patch("django.core.cache.cache.get", return_value=mock_json):
+        def _cache_get(key, default=None):
+            if key == enabled_board.redis_cache_key:
+                return mock_json
+            return default
+
+        with patch("django.core.cache.cache.get", side_effect=_cache_get):
             res = technician_client.get(self._url(enabled_board.pk))
 
         response_text = res.content.decode()
@@ -135,6 +145,12 @@ class TestBoardView:
     def test_admin_can_view_disabled_board(self, admin_client, disabled_board):
         mock_json = {"format": "brd2", "width": 100, "height": 100,
                      "outline": [], "parts": [], "pins": [], "nails": [], "nets": []}
-        with patch("django.core.cache.cache.get", return_value=mock_json):
+
+        def _cache_get(key, default=None):
+            if key == disabled_board.redis_cache_key:
+                return mock_json
+            return default
+
+        with patch("django.core.cache.cache.get", side_effect=_cache_get):
             res = admin_client.get(self._url(disabled_board.pk))
         assert res.status_code == 200
