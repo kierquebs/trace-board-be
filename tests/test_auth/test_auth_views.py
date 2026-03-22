@@ -79,8 +79,8 @@ class TestLogin:
         })
         assert res.status_code == 200
         body = res.json()
-        assert "access" in body
-        assert "refresh" in body
+        assert "access" in body["data"]
+        assert "refresh" in body["data"]
 
     def test_login_rejects_wrong_password(self, api_client, technician_user):
         res = api_client.post(self.url, {
@@ -92,14 +92,13 @@ class TestLogin:
     def test_suspended_user_cannot_login(self, api_client, technician_user):
         technician_user.is_suspended = True
         technician_user.save()
-        # JWT still issues tokens — suspension is enforced at permission level
-        # This is correct behaviour — client checks the me/ endpoint after login
+        # Suspension is enforced at login — suspended users are rejected immediately
         res = api_client.post(self.url, {
             "username": technician_user.username,
             "password": "testpass123",
         })
-        assert res.status_code == 200  # Login succeeds
-        # But accessing any protected resource will return 403
+        assert res.status_code == 403
+        assert "error" in res.json()
 
 
 @pytest.mark.django_db

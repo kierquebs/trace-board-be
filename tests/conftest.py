@@ -2,6 +2,7 @@
 Shared pytest fixtures and factory definitions.
 Available in all test modules without explicit import.
 """
+import hashlib
 import pytest
 import factory
 from django.contrib.auth import get_user_model
@@ -72,7 +73,7 @@ class BoardFileFactory(factory.django.DjangoModelFactory):
     category = "cellphone"
     status = BoardStatus.ENABLED
     s3_key = factory.Sequence(lambda n: f"boards/abc12345/board_{n}.brd")
-    content_hash = factory.Sequence(lambda n: f"{'a' * 63}{n}")
+    content_hash = factory.Sequence(lambda n: hashlib.sha256(str(n).encode()).hexdigest())
     file_size = 102400
     format = "brd2"
     parse_status = "success"

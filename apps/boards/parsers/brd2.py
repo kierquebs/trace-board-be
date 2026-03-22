@@ -54,6 +54,8 @@ _RE_OUTLINE = re.compile(r"^OUTLINE\s+(.*)", re.IGNORECASE)
 
 
 def parse(file_bytes: bytes, filename: str) -> ParseResult:
+    if not file_bytes or not file_bytes.strip():
+        return ParseResult(success=False, error="Empty file")
     try:
         text = file_bytes.decode("utf-8", errors="replace")
         board = _parse_text(text)
