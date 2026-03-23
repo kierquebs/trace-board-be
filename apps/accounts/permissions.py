@@ -62,6 +62,9 @@ class HasActiveSubscription(BasePermission):
     - Technicians need a Subscription row with status active/trial.
     - Suspended users always fail (handled before this check).
 
+    Reads from JWT claims first (no DB hit) and falls back to the User model
+    for non-JWT auth paths (e.g., tests using force_authenticate).
+
     Use on all board-viewing and annotation endpoints.
     """
 
@@ -70,6 +73,16 @@ class HasActiveSubscription(BasePermission):
     def has_permission(self, request: Request, view: APIView) -> bool:
         if not request.user or not request.user.is_authenticated:
             return False
+
+        # Fast path: read from JWT claims (embedded at login, no DB query needed)
+        if request.auth is not None:
+            if request.auth.get("is_suspended"):
+                return False
+            if request.auth.get("is_admin"):
+                return True
+            return bool(request.auth.get("has_active_subscription"))
+
+        # Fallback: DB lookup (force_authenticate in tests, non-JWT auth)
         if request.user.is_suspended:
             return False
         if request.user.is_admin:
@@ -101,7 +114,13 @@ class CanViewBoard(BasePermission):
         # Circular import guard — BoardFile imported inside method
         from apps.boards.models import BoardStatus
 
-        if request.user.is_admin:
+        # Fast path: read is_admin from JWT claims
+        is_admin = (
+            request.auth.get("is_admin")
+            if request.auth is not None
+            else request.user.is_admin
+        )
+        if is_admin:
             return True
 
         board_status = obj.status  # type: ignore[union-attr]
@@ -110,7 +129,12 @@ class CanViewBoard(BasePermission):
             return False
 
         if board_status == BoardStatus.RESTRICTED:
-            user_tier = request.user.subscription_tier
+            # Read subscription_tier from JWT claims (no DB hit)
+            user_tier = (
+                request.auth.get("subscription_tier")
+                if request.auth is not None
+                else request.user.subscription_tier
+            )
             if not user_tier:
                 return False
             user_level = self.TIER_ORDER.get(user_tier, 0)
