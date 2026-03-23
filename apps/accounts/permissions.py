@@ -62,6 +62,9 @@ class HasActiveSubscription(BasePermission):
     - Technicians need a Subscription row with status active/trial.
     - Suspended users always fail (handled before this check).
 
+    Reads from JWT claims first (no DB hit) and falls back to the User model
+    for non-JWT auth paths (e.g., tests using force_authenticate).
+
     Use on all board-viewing and annotation endpoints.
     """
 
@@ -70,6 +73,19 @@ class HasActiveSubscription(BasePermission):
     def has_permission(self, request: Request, view: APIView) -> bool:
         if not request.user or not request.user.is_authenticated:
             return False
+
+        # Fast path: read from JWT token payload (no DB query needed).
+        # Guard on key presence: plain RefreshToken.for_user() tokens lack custom
+        # claims; only activate fast path when TraceBoardTokenSerializer claims exist.
+        payload = getattr(request.auth, "payload", None)
+        if isinstance(payload, dict) and "has_active_subscription" in payload:
+            if payload.get("is_suspended"):
+                return False
+            if payload.get("is_admin"):
+                return True
+            return bool(payload.get("has_active_subscription"))
+
+        # Fallback: DB lookup (force_authenticate, plain tokens, MagicMock auth)
         if request.user.is_suspended:
             return False
         if request.user.is_admin:
@@ -101,7 +117,12 @@ class CanViewBoard(BasePermission):
         # Circular import guard — BoardFile imported inside method
         from apps.boards.models import BoardStatus
 
-        if request.user.is_admin:
+        # Fast path: read from JWT token payload (no DB query needed).
+        # Guard on key presence so plain tokens/MagicMocks fall back to DB.
+        payload = getattr(request.auth, "payload", None)
+        _has_custom_claims = isinstance(payload, dict) and "is_admin" in payload
+        is_admin = payload.get("is_admin") if _has_custom_claims else request.user.is_admin
+        if is_admin:
             return True
 
         board_status = obj.status  # type: ignore[union-attr]
@@ -110,7 +131,11 @@ class CanViewBoard(BasePermission):
             return False
 
         if board_status == BoardStatus.RESTRICTED:
-            user_tier = request.user.subscription_tier
+            user_tier = (
+                payload.get("subscription_tier")
+                if _has_custom_claims
+                else request.user.subscription_tier
+            )
             if not user_tier:
                 return False
             user_level = self.TIER_ORDER.get(user_tier, 0)

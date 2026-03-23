@@ -5,10 +5,13 @@ Board API views.
 /api/boards/{id}/         - Technician: board metadata
 /api/boards/{id}/view/    - Technician: ★ parsed board JSON for rendering
 """
+import json
 import logging
 from pathlib import Path
 
+from django.conf import settings
 from django.core.cache import cache
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser
@@ -24,6 +27,7 @@ from .models import BoardFile, BoardStatus, ParseStatus
 from .parsers import parse_board_file
 from .serializers import BoardFileDetailSerializer, BoardFileListSerializer
 from .storage import read_board_file
+from .tasks import record_board_view, refresh_board_cache
 
 logger = logging.getLogger(__name__)
 
@@ -130,8 +134,14 @@ class BoardViewEndpoint(APIView):
     permission_classes = [IsAuthenticated, HasActiveSubscription, CanViewBoard]
     throttle_classes = [BoardViewRateThrottle]
 
-    def get(self, request: Request, pk: int) -> Response:
-        board = get_object_or_404(BoardFile, pk=pk)
+    def get(self, request: Request, pk: int) -> HttpResponse:
+        board = get_object_or_404(
+            BoardFile.objects.only(
+                "id", "parse_status", "content_hash", "status", "min_tier",
+                "s3_key", "original_filename",
+            ),
+            pk=pk,
+        )
 
         # Object-level permission check (CanViewBoard)
         self.check_object_permissions(request, board)
@@ -155,8 +165,24 @@ class BoardViewEndpoint(APIView):
 
         # Check Redis cache first
         cached = cache.get(board.redis_cache_key)
-        if cached:
-            board.record_view()
+        if cached is not None:
+            # View counter update — async, off critical path
+            record_board_view.delay(board.pk)
+
+            # Pre-warm: if TTL is low, refresh cache before the next user hits a miss
+            remaining = cache.ttl(board.redis_cache_key)
+            threshold = getattr(settings, "BOARD_CACHE_REFRESH_THRESHOLD", 86400)
+            if remaining is not None and 0 < remaining < threshold:
+                refresh_board_cache.delay(board.pk)
+
+            # Fast path: cached value is already a JSON string — return directly,
+            # bypassing DRF rendering (saves 200–400 ms re-serialization).
+            if isinstance(cached, str):
+                return HttpResponse(
+                    '{"data":' + cached + '}',
+                    content_type="application/json",
+                )
+            # Legacy fallback: dict stored by an older code version (until TTL expires)
             return Response({"data": cached})
 
         # Cache miss — re-parse from S3
@@ -183,15 +209,15 @@ class BoardViewEndpoint(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
-        board_json = result.board.to_json()
-
-        # Refresh Redis cache
-        from django.conf import settings
+        board_json_str = json.dumps(result.board.to_json())
         cache.set(
             board.redis_cache_key,
-            board_json,
+            board_json_str,
             timeout=getattr(settings, "BOARD_PARSE_CACHE_TTL", 604800),
         )
 
-        board.record_view()
-        return Response({"data": board_json})
+        record_board_view.delay(board.pk)
+        return HttpResponse(
+            '{"data":' + board_json_str + '}',
+            content_type="application/json",
+        )

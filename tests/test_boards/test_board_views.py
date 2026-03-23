@@ -4,10 +4,32 @@ Tests for /api/boards/* endpoints.
 Critical invariant: the /view/ endpoint must NEVER return raw file bytes,
 s3_key, content_hash, or any data that could reconstruct the original file.
 """
+import json
 import pytest
 from unittest.mock import patch
 
 from apps.boards.models import BoardFile, BoardStatus
+
+
+_MOCK_BOARD_DICT = {
+    "format": "brd2",
+    "width": 1000.0,
+    "height": 800.0,
+    "outline": [],
+    "parts": [{"id": "U1", "name": "U1", "side": "top",
+               "bounds": {"x": 0, "y": 0, "width": 50, "height": 50},
+               "part_type": "", "value": "", "description": ""}],
+    "pins": [],
+    "nails": [],
+    "nets": [],
+}
+
+# Cache now stores pre-serialized JSON strings, not dicts
+_MOCK_BOARD_JSON = json.dumps(_MOCK_BOARD_DICT)
+
+_SMALL_BOARD_DICT = {"format": "brd2", "width": 100, "height": 100,
+                     "outline": [], "parts": [], "pins": [], "nails": [], "nets": []}
+_SMALL_BOARD_JSON = json.dumps(_SMALL_BOARD_DICT)
 
 
 @pytest.mark.django_db
@@ -70,25 +92,16 @@ class TestBoardView:
 
     def test_subscribed_can_view_enabled_board(self, technician_client, enabled_board):
         """Board with status=success and Redis cache hit returns parsed JSON."""
-        mock_board_json = {
-            "format": "brd2",
-            "width": 1000.0,
-            "height": 800.0,
-            "outline": [],
-            "parts": [{"id": "U1", "name": "U1", "side": "top",
-                        "bounds": {"x": 0, "y": 0, "width": 50, "height": 50},
-                        "part_type": "", "value": "", "description": ""}],
-            "pins": [],
-            "nails": [],
-            "nets": [],
-        }
 
         def _cache_get(key, default=None):
             if key == enabled_board.redis_cache_key:
-                return mock_board_json
+                return _MOCK_BOARD_JSON
             return default
 
-        with patch("django.core.cache.cache.get", side_effect=_cache_get):
+        with patch("django.core.cache.cache.get", side_effect=_cache_get), \
+             patch("django.core.cache.cache.ttl", return_value=604800), \
+             patch("apps.boards.views.record_board_view") as mock_record:
+            mock_record.delay = lambda *a, **kw: None
             res = technician_client.get(self._url(enabled_board.pk))
 
         assert res.status_code == 200
@@ -100,15 +113,16 @@ class TestBoardView:
 
     def test_response_never_contains_s3_key(self, technician_client, enabled_board):
         """CRITICAL: s3_key must NEVER appear in /view/ response."""
-        mock_json = {"format": "brd2", "width": 100, "height": 100,
-                     "outline": [], "parts": [], "pins": [], "nails": [], "nets": []}
 
         def _cache_get(key, default=None):
             if key == enabled_board.redis_cache_key:
-                return mock_json
+                return _SMALL_BOARD_JSON
             return default
 
-        with patch("django.core.cache.cache.get", side_effect=_cache_get):
+        with patch("django.core.cache.cache.get", side_effect=_cache_get), \
+             patch("django.core.cache.cache.ttl", return_value=604800), \
+             patch("apps.boards.views.record_board_view") as mock_record:
+            mock_record.delay = lambda *a, **kw: None
             res = technician_client.get(self._url(enabled_board.pk))
 
         response_text = res.content.decode()
@@ -143,14 +157,56 @@ class TestBoardView:
         assert res.status_code in (403, 404)
 
     def test_admin_can_view_disabled_board(self, admin_client, disabled_board):
-        mock_json = {"format": "brd2", "width": 100, "height": 100,
-                     "outline": [], "parts": [], "pins": [], "nails": [], "nets": []}
 
         def _cache_get(key, default=None):
             if key == disabled_board.redis_cache_key:
-                return mock_json
+                return _SMALL_BOARD_JSON
             return default
 
-        with patch("django.core.cache.cache.get", side_effect=_cache_get):
+        with patch("django.core.cache.cache.get", side_effect=_cache_get), \
+             patch("django.core.cache.cache.ttl", return_value=604800), \
+             patch("apps.boards.views.record_board_view") as mock_record:
+            mock_record.delay = lambda *a, **kw: None
             res = admin_client.get(self._url(disabled_board.pk))
         assert res.status_code == 200
+
+    def test_cache_prewarm_triggered_on_low_ttl(self, technician_client, enabled_board):
+        """When TTL drops below threshold, refresh_board_cache task is fired."""
+
+        def _cache_get(key, default=None):
+            if key == enabled_board.redis_cache_key:
+                return _SMALL_BOARD_JSON
+            return default
+
+        with patch("django.core.cache.cache.get", side_effect=_cache_get), \
+             patch("django.core.cache.cache.ttl", return_value=3600), \
+             patch("apps.boards.views.record_board_view") as mock_record, \
+             patch("apps.boards.views.refresh_board_cache") as mock_refresh:
+            mock_record.delay = lambda *a, **kw: None
+            refresh_calls = []
+            mock_refresh.delay = lambda *a, **kw: refresh_calls.append(a)
+            res = technician_client.get(self._url(enabled_board.pk))
+
+        assert res.status_code == 200
+        assert len(refresh_calls) == 1
+        assert refresh_calls[0][0] == enabled_board.pk
+
+    def test_no_prewarm_when_ttl_is_healthy(self, technician_client, enabled_board):
+        """When TTL is well above threshold, no refresh task is fired."""
+
+        def _cache_get(key, default=None):
+            if key == enabled_board.redis_cache_key:
+                return _SMALL_BOARD_JSON
+            return default
+
+        with patch("django.core.cache.cache.get", side_effect=_cache_get), \
+             patch("django.core.cache.cache.ttl", return_value=604800), \
+             patch("apps.boards.views.record_board_view") as mock_record, \
+             patch("apps.boards.views.refresh_board_cache") as mock_refresh:
+            mock_record.delay = lambda *a, **kw: None
+            refresh_calls = []
+            mock_refresh.delay = lambda *a, **kw: refresh_calls.append(a)
+            res = technician_client.get(self._url(enabled_board.pk))
+
+        assert res.status_code == 200
+        assert len(refresh_calls) == 0

@@ -146,6 +146,7 @@ CELERY_ACCEPT_CONTENT = ["json"]
 BOARD_FILE_MAX_SIZE_MB = 50
 BOARD_FILE_ALLOWED_EXTENSIONS = {".brd", ".bv", ".bvr", ".fz", ".asc", ".cad", ".cst"}
 BOARD_PARSE_CACHE_TTL = 60 * 60 * 24 * 7  # 7 days
+BOARD_CACHE_REFRESH_THRESHOLD = 60 * 60 * 24  # 24 hours — trigger pre-warm when TTL drops below this
 
 # ---------------------------------------------------------------------------
 # S3 — private board storage
