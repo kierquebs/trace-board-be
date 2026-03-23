@@ -74,15 +74,17 @@ class HasActiveSubscription(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        # Fast path: read from JWT claims (embedded at login, no DB query needed)
-        if request.auth is not None:
-            if request.auth.get("is_suspended"):
+        # Fast path: read from JWT token payload (no DB query needed).
+        # Guard with isinstance(dict) so MagicMocks in unit tests fall through.
+        payload = getattr(request.auth, "payload", None)
+        if isinstance(payload, dict):
+            if payload.get("is_suspended"):
                 return False
-            if request.auth.get("is_admin"):
+            if payload.get("is_admin"):
                 return True
-            return bool(request.auth.get("has_active_subscription"))
+            return bool(payload.get("has_active_subscription"))
 
-        # Fallback: DB lookup (force_authenticate in tests, non-JWT auth)
+        # Fallback: DB lookup (force_authenticate, MagicMock auth, non-JWT paths)
         if request.user.is_suspended:
             return False
         if request.user.is_admin:
@@ -114,11 +116,11 @@ class CanViewBoard(BasePermission):
         # Circular import guard — BoardFile imported inside method
         from apps.boards.models import BoardStatus
 
-        # Fast path: read is_admin from JWT claims
+        # Fast path: read from JWT token payload (no DB query needed).
+        # Guard with isinstance(dict) so MagicMocks in unit tests fall through.
+        payload = getattr(request.auth, "payload", None)
         is_admin = (
-            request.auth.get("is_admin")
-            if request.auth is not None
-            else request.user.is_admin
+            payload.get("is_admin") if isinstance(payload, dict) else request.user.is_admin
         )
         if is_admin:
             return True
@@ -129,10 +131,9 @@ class CanViewBoard(BasePermission):
             return False
 
         if board_status == BoardStatus.RESTRICTED:
-            # Read subscription_tier from JWT claims (no DB hit)
             user_tier = (
-                request.auth.get("subscription_tier")
-                if request.auth is not None
+                payload.get("subscription_tier")
+                if isinstance(payload, dict)
                 else request.user.subscription_tier
             )
             if not user_tier:
