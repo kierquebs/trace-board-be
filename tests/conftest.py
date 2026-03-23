@@ -139,10 +139,10 @@ def api_client():
 @pytest.fixture
 def admin_client(db, admin_user):
     from rest_framework.test import APIClient
-    from rest_framework_simplejwt.tokens import RefreshToken
+    from apps.accounts.views import TraceBoardTokenSerializer
 
     client = APIClient()
-    refresh = RefreshToken.for_user(admin_user)
+    refresh = TraceBoardTokenSerializer.get_token(admin_user)
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
     return client
 
@@ -150,10 +150,10 @@ def admin_client(db, admin_user):
 @pytest.fixture
 def technician_client(db, subscribed_technician):
     from rest_framework.test import APIClient
-    from rest_framework_simplejwt.tokens import RefreshToken
+    from apps.accounts.views import TraceBoardTokenSerializer
 
     client = APIClient()
-    refresh = RefreshToken.for_user(subscribed_technician)
+    refresh = TraceBoardTokenSerializer.get_token(subscribed_technician)
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
     return client
 
@@ -161,9 +161,9 @@ def technician_client(db, subscribed_technician):
 @pytest.fixture
 def unsubscribed_client(db, technician_user):
     from rest_framework.test import APIClient
-    from rest_framework_simplejwt.tokens import RefreshToken
+    from apps.accounts.views import TraceBoardTokenSerializer
 
     client = APIClient()
-    refresh = RefreshToken.for_user(technician_user)
+    refresh = TraceBoardTokenSerializer.get_token(technician_user)
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
     return client

@@ -75,16 +75,17 @@ class HasActiveSubscription(BasePermission):
             return False
 
         # Fast path: read from JWT token payload (no DB query needed).
-        # Guard with isinstance(dict) so MagicMocks in unit tests fall through.
+        # Guard on key presence: plain RefreshToken.for_user() tokens lack custom
+        # claims; only activate fast path when TraceBoardTokenSerializer claims exist.
         payload = getattr(request.auth, "payload", None)
-        if isinstance(payload, dict):
+        if isinstance(payload, dict) and "has_active_subscription" in payload:
             if payload.get("is_suspended"):
                 return False
             if payload.get("is_admin"):
                 return True
             return bool(payload.get("has_active_subscription"))
 
-        # Fallback: DB lookup (force_authenticate, MagicMock auth, non-JWT paths)
+        # Fallback: DB lookup (force_authenticate, plain tokens, MagicMock auth)
         if request.user.is_suspended:
             return False
         if request.user.is_admin:
@@ -117,11 +118,10 @@ class CanViewBoard(BasePermission):
         from apps.boards.models import BoardStatus
 
         # Fast path: read from JWT token payload (no DB query needed).
-        # Guard with isinstance(dict) so MagicMocks in unit tests fall through.
+        # Guard on key presence so plain tokens/MagicMocks fall back to DB.
         payload = getattr(request.auth, "payload", None)
-        is_admin = (
-            payload.get("is_admin") if isinstance(payload, dict) else request.user.is_admin
-        )
+        _has_custom_claims = isinstance(payload, dict) and "is_admin" in payload
+        is_admin = payload.get("is_admin") if _has_custom_claims else request.user.is_admin
         if is_admin:
             return True
 
@@ -133,7 +133,7 @@ class CanViewBoard(BasePermission):
         if board_status == BoardStatus.RESTRICTED:
             user_tier = (
                 payload.get("subscription_tier")
-                if isinstance(payload, dict)
+                if _has_custom_claims
                 else request.user.subscription_tier
             )
             if not user_tier:
