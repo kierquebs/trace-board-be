@@ -57,14 +57,37 @@ class ParsedPin:
 
 
 @dataclass
+class Geometry:
+    """Rich rotated-bounding-box geometry computed from pin positions."""
+    center_x: float
+    center_y: float
+    angle_deg: float            # Rotation angle (0–360), computed from pin positions
+    width: float                # Width in mils along the component's long axis
+    height: float               # Height in mils along the perpendicular axis
+    outline: list[Point]        # 4 corners of the rotated bounding box
+
+    def to_dict(self) -> dict:
+        return {
+            "center_x": self.center_x,
+            "center_y": self.center_y,
+            "angle_deg": self.angle_deg,
+            "width": self.width,
+            "height": self.height,
+            "outline": [p.to_dict() for p in self.outline],
+        }
+
+
+@dataclass
 class ParsedPart:
     id: str                     # Unique part id, e.g. "U1", "C45"
     name: str                   # Reference designator, e.g. "U1"
     side: str                   # "top" | "bottom"
     bounds: BoundingBox
+    rotation: float = 0.0       # Rotation in degrees (0 / 90 / 180 / 270)
     part_type: str = ""         # Package type, e.g. "0402", "BGA256"
     value: str = ""             # Component value, e.g. "10uF"
     description: str = ""
+    geometry: Optional[Geometry] = None  # Computed rich geometry (None if no pins)
 
     def to_dict(self) -> dict:
         return {
@@ -72,9 +95,11 @@ class ParsedPart:
             "name": self.name,
             "side": self.side,
             "bounds": self.bounds.to_dict(),
+            "rotation": self.rotation,
             "part_type": self.part_type,
             "value": self.value,
             "description": self.description,
+            "geometry": self.geometry.to_dict() if self.geometry is not None else None,
         }
 
 

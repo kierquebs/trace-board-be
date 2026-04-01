@@ -1,19 +1,27 @@
 """
 Tests for the Landrex .brd parser.
 
-Requires sample fixture at tests/fixtures/A2141_820-01700.brd
-(MacBook Pro 16" 2019, board 820-01700).
+Requires sample fixtures at:
+  tests/fixtures/A2141_820-01700.brd  (MacBook Pro 16" 2019, 820-01700)
+  tests/fixtures/J113  820-00165.brd  (J113 board, 820-00165)
 """
 import pytest
 from pathlib import Path
 
 FIXTURE = Path(__file__).parent.parent / 'fixtures' / 'A2141_820-01700.brd'
+J113_FIXTURE = Path(__file__).parent.parent / 'fixtures' / 'J113  820-00165.brd'
 
 
 def _load():
     if not FIXTURE.exists():
         pytest.skip(f"Fixture not found: {FIXTURE}")
     return FIXTURE.read_bytes()
+
+
+def _load_j113():
+    if not J113_FIXTURE.exists():
+        pytest.skip(f"Fixture not found: {J113_FIXTURE}")
+    return J113_FIXTURE.read_bytes()
 
 
 # ── Detection ──────────────────────────────────────────────────────────────────
@@ -136,3 +144,97 @@ def test_to_json_structure():
     assert set(pin['position']) == {'x', 'y'}
     net = j['nets'][0]
     assert set(net) >= {'id', 'name', 'pin_ids', 'is_ground', 'is_power'}
+
+
+# ── Geometry assertions (A2141) ────────────────────────────────────────────────
+
+def test_parts_have_geometry():
+    from apps.boards.parsers.brd_landrex import parse
+    b = parse(_load(), 'test.brd').board
+    parts_with_geo = [p for p in b.parts if p.geometry is not None]
+    # All parts with at least one pin should have geometry
+    assert len(parts_with_geo) > len(b.parts) * 0.9
+
+
+def test_geometry_in_json_output():
+    from apps.boards.parsers.brd_landrex import parse
+    j = parse(_load(), 'test.brd').board.to_json()
+    part = j['parts'][0]
+    assert 'geometry' in part
+
+
+def test_c7863_geometry_45_degrees():
+    """C7863 on A2141 sits at 45° — pin 1 (8569,1102), pin 2 (8583,1116)."""
+    from apps.boards.parsers.brd_landrex import parse
+    b = parse(_load(), 'test.brd').board
+    c7863 = next((p for p in b.parts if p.name == 'C7863'), None)
+    assert c7863 is not None, "C7863 not found in A2141 board"
+    assert c7863.geometry is not None
+    assert abs(c7863.geometry.angle_deg - 45.0) < 1.0
+    assert abs(c7863.geometry.center_x - 8576.0) < 1.0
+    assert abs(c7863.geometry.center_y - 1109.0) < 1.0
+    assert len(c7863.geometry.outline) == 4
+
+
+def test_geometry_outline_serialises():
+    from apps.boards.parsers.brd_landrex import parse
+    j = parse(_load(), 'test.brd').board.to_json()
+    parts_with_geo = [p for p in j['parts'] if p.get('geometry') is not None]
+    assert parts_with_geo, "No parts with geometry found in JSON output"
+    geo = parts_with_geo[0]['geometry']
+    assert 'center_x' in geo
+    assert 'center_y' in geo
+    assert 'angle_deg' in geo
+    assert 'width' in geo
+    assert 'height' in geo
+    assert 'outline' in geo
+    assert len(geo['outline']) == 4
+    for corner in geo['outline']:
+        assert 'x' in corner
+        assert 'y' in corner
+
+
+# ── J113 fixture tests ─────────────────────────────────────────────────────────
+
+def test_j113_format_detected_as_landrex():
+    from apps.boards.parsers.detect import detect_format, BoardFormat
+    fmt = detect_format(_load_j113(), 'J113.brd')
+    assert fmt == BoardFormat.BRD_LANDREX
+
+
+def test_j113_parse_returns_success():
+    from apps.boards.parsers.brd_landrex import parse
+    r = parse(_load_j113(), 'J113.brd')
+    assert r.success, f"Parse failed: {r.error}"
+    assert r.board is not None
+
+
+def test_j113_board_counts():
+    from apps.boards.parsers.brd_landrex import parse
+    b = parse(_load_j113(), 'J113.brd').board
+    assert b.format == 'brd_landrex'
+    assert len(b.parts) == 3452
+    assert len(b.pins) == 9388
+    assert len(b.nails) == 1540
+
+
+def test_j113_board_dimensions():
+    """J113 820-00165 is ~242mm × 61mm → > 9527 × 2402 mils."""
+    from apps.boards.parsers.brd_landrex import parse
+    b = parse(_load_j113(), 'J113.brd').board
+    assert b.width > 8000    # > 203mm
+    assert b.height > 2000   # > 51mm
+
+
+def test_j113_no_orphaned_pins():
+    from apps.boards.parsers.brd_landrex import parse
+    b = parse(_load_j113(), 'J113.brd').board
+    valid = {p.id for p in b.parts}
+    assert all(pin.part_id in valid for pin in b.pins)
+
+
+def test_j113_parts_have_geometry():
+    from apps.boards.parsers.brd_landrex import parse
+    b = parse(_load_j113(), 'J113.brd').board
+    parts_with_geo = [p for p in b.parts if p.geometry is not None]
+    assert len(parts_with_geo) > len(b.parts) * 0.9

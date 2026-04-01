@@ -40,11 +40,15 @@ Board origin is top-left; Y increases downward.
 from __future__ import annotations
 
 import logging
+import re
+from collections import defaultdict
 from typing import Optional
 
+from .geometry import compute_part_geometry
 from .models import (
     BoundingBox,
     ParsedBoard,
+    ParsedNail,
     ParsedNet,
     ParsedPin,
     ParsedPart,
@@ -55,6 +59,34 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 _SEP = 0xF7   # separator / padding byte
+
+
+# Maps reference-designator prefix → human-readable part category.
+# Used to populate part_type when the binary format carries no label data.
+_REFDES_TYPE: dict[str, str] = {
+    'U':    'IC',
+    'IC':   'IC',
+    'C':    'Capacitor',
+    'CAP':  'Capacitor',
+    'R':    'Resistor',
+    'RES':  'Resistor',
+    'L':    'Inductor',
+    'FL':   'Filter',
+    'Q':    'Transistor',
+    'D':    'Diode',
+    'LED':  'LED',
+    'F':    'Fuse',
+    'J':    'Connector',
+    'CN':   'Connector',
+    'P':    'Connector',
+    'SW':   'Switch',
+    'S':    'Switch',
+    'Y':    'Crystal',
+    'XTAL': 'Crystal',
+    'TR':   'Transformer',
+    'TP':   'TestPoint',
+}
+_REFDES_PREFIX_RE = re.compile(r'^([A-Za-z]+)', re.ASCII)
 
 
 # ── Decoding helpers ───────────────────────────────────────────────────────────
@@ -93,6 +125,101 @@ def _int(s: str, default: int = 0) -> int:
         return default
 
 
+def _decode_coord(raw: str) -> float:
+    """
+    Parse a coordinate string to float, handling integers, decimals, and
+    scientific notation (e.g. '1350', '1350.0', '1.35e3').
+    Returns 0.0 on any parse failure.
+    """
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _parse_rotation_side(data: bytes) -> tuple[float, str]:
+    """
+    Decode the 6-byte rotation/side field from a PARTS line.
+
+    Actual encoding (confirmed from binary inspection of J113 820-00165.brd):
+        First decoded character  → side indicator: '5' = bottom, anything else = top
+        Remaining characters     → rotation angle in degrees (integer string)
+
+    Examples:
+        '5'   → bottom, 0°
+        '1'   → top, 0°
+        '10'  → top, 0°    (explicit '0' rotation suffix)
+        '135' → top, 35°   (side='1', angle=35)
+        '580' → bottom, 80° (side='5', angle=80)
+        '-99' → top, 0°    (sentinel for "no data")
+    """
+    val = _decode(data).strip()
+    if not val or val.startswith('-'):
+        # Empty or sentinel value ('-99') — no orientation data
+        return 0.0, 'top'
+
+    side = 'bottom' if val[0] == '5' else 'top'
+
+    rotation = 0.0
+    angle_str = val[1:]   # everything after the side character
+    if angle_str:
+        try:
+            rotation = float(angle_str) % 360.0
+        except ValueError:
+            pass
+
+    return rotation, side
+
+
+def _geometric_rotation(pins: list) -> float | None:
+    """
+    Compute the orientation angle (in degrees) of a component from its pin
+    positions. Only applied when the file does not store an explicit angle.
+
+    For 2-pin passives: angle of the vector from pin 1 to pin 2, normalised
+    to [0, 180) so that a horizontal part = 0° and a vertical part = 90°.
+    Returns None when the geometry is ambiguous (single pin, all coincident).
+    """
+    import math
+
+    if len(pins) < 2:
+        return None
+
+    if len(pins) == 2:
+        dx = pins[1].position.x - pins[0].position.x
+        dy = pins[1].position.y - pins[0].position.y
+        if dx == 0 and dy == 0:
+            return None
+        angle = math.degrees(math.atan2(dy, dx)) % 180.0
+        return round(angle, 1)
+
+    # For multi-pin components compute the principal axis via the 2-D
+    # moment of inertia (poor-man's PCA on the pin cloud).
+    xs = [p.position.x for p in pins]
+    ys = [p.position.y for p in pins]
+    cx = sum(xs) / len(xs)
+    cy = sum(ys) / len(ys)
+    ixx = sum((y - cy) ** 2 for y in ys)
+    ixy = sum((x - cx) * (y - cy) for x, y in zip(xs, ys))
+    if ixx == 0 and ixy == 0:
+        return None
+    angle = math.degrees(0.5 * math.atan2(-2 * ixy, ixx)) % 180.0
+    return round(angle, 1)
+
+
+def _infer_part_type(name: str) -> str:
+    """
+    Derive a human-readable component category from the reference designator.
+    Returns an empty string when the prefix is unknown.
+    """
+    m = _REFDES_PREFIX_RE.match(name)
+    if not m:
+        return ''
+    prefix = m.group(1).upper()
+    # Try full prefix first, then first character only
+    return _REFDES_TYPE.get(prefix) or _REFDES_TYPE.get(prefix[:1], '')
+
+
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 def parse(file_bytes: bytes, filename: str) -> ParseResult:
@@ -111,9 +238,10 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
     lines = file_bytes.split(b'\r\n')
 
     # ── Locate section headers ────────────────────────────────────────────────
-    parts_hdr: Optional[int] = None
-    pins_hdr:  Optional[int] = None
-    nets_hdr:  Optional[int] = None
+    parts_hdr:  Optional[int] = None
+    pins_hdr:   Optional[int] = None
+    nets_hdr:   Optional[int] = None
+    nails_hdr:  Optional[int] = None
 
     for i, line in enumerate(lines):
         d = _decode(line)
@@ -121,6 +249,8 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
             parts_hdr = i
         elif d.startswith('Pins:'):
             pins_hdr = i
+        elif d.startswith('Nails:'):
+            nails_hdr = i
         elif d.startswith('Nets:'):
             nets_hdr = i
 
@@ -130,21 +260,29 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
     p_start = parts_hdr + 1
     p_end   = pins_hdr          # exclusive
     q_start = pins_hdr + 1
-    q_end   = nets_hdr if nets_hdr is not None else len(lines)
+    # Pins end at the first section boundary after Pins:
+    _pins_end_candidates = [
+        x for x in (nails_hdr, nets_hdr) if x is not None
+    ]
+    q_end = min(_pins_end_candidates) if _pins_end_candidates else len(lines)
 
-    logger.debug("Sections — parts [%d:%d]  pins [%d:%d]",
-                 p_start, p_end, q_start, q_end)
+    logger.debug("Sections — parts [%d:%d]  pins [%d:%d]  nails_hdr=%s",
+                 p_start, p_end, q_start, q_end, nails_hdr)
 
-    # ── Board outline (lines 7–11) ────────────────────────────────────────────
+    # ── Board outline ─────────────────────────────────────────────────────────
+    # Starts at line 7 (first coordinate after the 'Format:' metadata header)
+    # and runs up to the blank line immediately before the 'Parts:' header.
+    # Simple boards use 4–5 points (lines 7–11); complex boards (e.g. J113)
+    # can have hundreds of polygon vertices.
     outline: list[Point] = []
-    for line in lines[7:12]:
+    for line in lines[7:parts_hdr]:
         if not line:
             continue
         f = _split_fields(line)
         if len(f) >= 2:
             outline.append(Point(
-                x=float(_int(_decode(f[0]))),
-                y=float(_int(_decode(f[1]))),
+                x=_decode_coord(_decode(f[0])),
+                y=_decode_coord(_decode(f[1])),
             ))
     # Remove duplicate closing vertex if present
     if len(outline) >= 2 and outline[0].x == outline[-1].x and outline[0].y == outline[-1].y:
@@ -152,8 +290,10 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
 
     # ── Parse PARTS (22-byte fixed-width lines) ───────────────────────────────
     # bytes  0–10: component name (0xf7 padded)
-    # bytes 11–16: rotation/side flag
-    # bytes 17–21: exclusive end index into PINS
+    # bytes 11–16: rotation/side field ('5'=bottom, '10'=top; see _parse_rotation_side)
+    # bytes 17–21: exclusive end index into PINS array
+    # bytes 22+  : optional extended label fields (part_type, value) in some
+    #              Landrex variants — read as decoded text and split on separators
     raw_parts: list[dict] = []
     for line in lines[p_start:p_end]:
         if len(line) < 22:
@@ -161,12 +301,32 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
         name = _decode(line[0:11])
         if not name:
             continue
-        side_raw = _decode(line[11:17])
-        end_idx  = _int(_decode(line[17:22]), default=-1)
+        rotation, side = _parse_rotation_side(line[11:17])
+        end_idx = _int(_decode(line[17:22]), default=-1)
         if end_idx < 0:
             continue
-        side = 'bottom' if side_raw == '5' else 'top'
-        raw_parts.append({'name': name, 'side': side, 'end': end_idx})
+
+        # Extended label data (bytes 22+): present in some file variants.
+        # Split on separator runs and treat the first two tokens as
+        # part_type and value respectively.
+        part_type = _infer_part_type(name)   # fallback: infer from ref-des prefix
+        value = ''
+        if len(line) > 22:
+            ext_tokens = [_decode(f) for f in _split_fields(line[22:]) if f]
+            ext_tokens = [t for t in ext_tokens if t]
+            if ext_tokens:
+                part_type = ext_tokens[0]
+            if len(ext_tokens) > 1:
+                value = ext_tokens[1]
+
+        raw_parts.append({
+            'name': name,
+            'side': side,
+            'rotation': rotation,
+            'end': end_idx,
+            'part_type': part_type,
+            'value': value,
+        })
 
     # ── Parse PINS (variable-length, 5 fields) ────────────────────────────────
     # field0 = X (mils), field1 = Y (mils), field2 = net_id,
@@ -179,8 +339,8 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
         if len(f) < 5:
             continue
         try:
-            x        = int(_decode(f[0]))
-            y        = int(_decode(f[1]))
+            x        = _decode_coord(_decode(f[0]))
+            y        = _decode_coord(_decode(f[1]))
             net_id   = _int(_decode(f[2]), default=-99)
             comp_idx = _int(_decode(f[3]), default=0)
             net_name = _decode(f[4])
@@ -249,26 +409,95 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
             if net is not None:
                 net.pin_ids.append(pin_id)
 
-        # Bounding box from pin positions + 20 mil margin
+        # Bounding box derived from the exact extent of all pin positions,
+        # plus a uniform courtyard margin.  Because pin coordinates are stored
+        # in absolute board space (already rotation-transformed), no additional
+        # rotation correction is needed here.
         if part_pin_objects:
             xs = [p.position.x for p in part_pin_objects]
             ys = [p.position.y for p in part_pin_objects]
-            margin = 20.0
+            x_span = max(xs) - min(xs)
+            y_span = max(ys) - min(ys)
             bounds = BoundingBox(
-                x=min(xs) - margin,
-                y=min(ys) - margin,
-                width=max(max(xs) - min(xs) + 2 * margin, 40.0),
-                height=max(max(ys) - min(ys) + 2 * margin, 40.0),
+                x=min(xs),
+                y=min(ys),
+                width=x_span,
+                height=y_span,
             )
         else:
-            bounds = BoundingBox(x=0, y=0, width=40, height=40)
+            bounds = BoundingBox(x=0, y=0, width=0.0, height=0.0)
+
+        # If the file carries no explicit rotation (0°), fall back to the
+        # geometric orientation derived from the pin cloud.
+        rotation = prec['rotation']
+        if rotation == 0.0 and part_pin_objects:
+            geo = _geometric_rotation(part_pin_objects)
+            if geo is not None:
+                rotation = geo
 
         parts.append(ParsedPart(
             id=part_id,
             name=prec['name'],
             side=prec['side'],
             bounds=bounds,
+            rotation=rotation,
+            part_type=prec['part_type'],
+            value=prec['value'],
         ))
+
+    # ── Parse NAILS (probe test points) ──────────────────────────────────────
+    # Nail line layout (5 fields separated by runs of 0xf7):
+    #   Field 0: probe number (integer)
+    #   Field 1: X coordinate (mils)
+    #   Field 2: Y coordinate (mils)
+    #   Field 3: side code ('1' = top, '2' = bottom)
+    #   Field 4: net name
+    nails: list[ParsedNail] = []
+    if nails_hdr is not None:
+        n_start = nails_hdr + 1
+        n_end = nets_hdr if (nets_hdr is not None and nets_hdr > nails_hdr) else len(lines)
+        for line in lines[n_start:n_end]:
+            if not line:
+                continue
+            f = _split_fields(line)
+            if len(f) < 5:
+                continue
+            try:
+                probe    = _int(_decode(f[0]))
+                nx       = _decode_coord(_decode(f[1]))
+                ny       = _decode_coord(_decode(f[2]))
+                side_raw = _decode(f[3]).strip()
+                net_name = _decode(f[4])
+            except (ValueError, IndexError):
+                continue
+
+            nail_side = 'bottom' if side_raw == '2' else 'top'
+            nail_id   = f"nail_{probe}_{len(nails)}"
+            net_id_str = ''
+
+            if net_name and net_name not in ('NC', 'UNCONNECTED', '---', ''):
+                net = _get_net(net_name, -1)
+                if net is not None:
+                    net_id_str = net.id
+                    net.nail_ids.append(nail_id)
+
+            nails.append(ParsedNail(
+                id=nail_id,
+                probe_number=probe,
+                position=Point(x=nx, y=ny),
+                net_id=net_id_str,
+                net_name=net_name,
+                side=nail_side,
+            ))
+
+    # ── Compute geometry for each part ───────────────────────────────────────
+    part_pin_positions: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for pin in pins:
+        part_pin_positions[pin.part_id].append((pin.position.x, pin.position.y))
+
+    for part in parts:
+        positions = part_pin_positions.get(part.id, [])
+        part.geometry = compute_part_geometry(part.name, positions)
 
     # ── Compute board dimensions from outline ─────────────────────────────────
     if outline:
@@ -284,11 +513,11 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
     else:
         board_w = board_h = 0.0
 
-    nets = [n for n in net_map.values() if n.pin_ids]
+    nets = [n for n in net_map.values() if n.pin_ids or n.nail_ids]
 
     logger.info(
-        "Landrex BRD: %d parts, %d pins, %d nets, %.0f×%.0f mils",
-        len(parts), len(pins), len(nets), board_w, board_h,
+        "Landrex BRD: %d parts, %d pins, %d nails, %d nets, %.0f×%.0f mils",
+        len(parts), len(pins), len(nails), len(nets), board_w, board_h,
     )
 
     return ParsedBoard(
@@ -296,7 +525,7 @@ def _parse_internal(file_bytes: bytes) -> ParsedBoard:
         outline=outline,
         parts=parts,
         pins=pins,
-        nails=[],
+        nails=nails,
         nets=nets,
         width=board_w,
         height=board_h,
