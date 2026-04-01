@@ -34,7 +34,9 @@ Reference: OpenBoardView BVRFile.cpp
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 
+from .geometry import compute_part_geometry
 from .models import (
     BoundingBox,
     ParsedBoard,
@@ -252,6 +254,17 @@ def _parse_text(text: str) -> ParsedBoard:  # noqa: C901
         # already built from the PINS pass above, so we skip it.
 
     # ------------------------------------------------------------------
+    # Compute geometry for each part
+    # ------------------------------------------------------------------
+    part_pin_positions: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for pin in pins:
+        part_pin_positions[pin.part_id].append((pin.position.x, pin.position.y))
+
+    for part in parts:
+        positions = part_pin_positions.get(part.id, [])
+        part.geometry = compute_part_geometry(part.name, positions)
+
+    # ------------------------------------------------------------------
     # Derive board outline and dimensions from part extents if not given
     # ------------------------------------------------------------------
     all_x: list[float] = []
@@ -309,22 +322,15 @@ def _normalise_net(name: str) -> str:
     return cleaned.upper()
 
 
-def _expand_bounds(bounds: BoundingBox, x: float, y: float, padding: float = 20.0) -> None:
-    """Grow a part's bounding box to encompass a pin position."""
-    if bounds.width == 0 and bounds.height == 0:
-        # First pin — initialise from the pin position
-        bounds.x = x - padding
-        bounds.y = y - padding
-        bounds.width = padding * 2
-        bounds.height = padding * 2
-        return
+def _expand_bounds(bounds: BoundingBox, x: float, y: float, padding: float = 0.0) -> None:
+    """Grow a part's bounding box to encompass a pin position.
+
+    Parts are initialised with their PARTS-section center as (x, y) and
+    width=height=0, so the first call expands from that anchor outward.
+    """
     cur_max_x = bounds.x + bounds.width
     cur_max_y = bounds.y + bounds.height
-    new_min_x = min(bounds.x, x - padding)
-    new_min_y = min(bounds.y, y - padding)
-    new_max_x = max(cur_max_x, x + padding)
-    new_max_y = max(cur_max_y, y + padding)
-    bounds.x = new_min_x
-    bounds.y = new_min_y
-    bounds.width = new_max_x - new_min_x
-    bounds.height = new_max_y - new_min_y
+    bounds.x = min(bounds.x, x - padding)
+    bounds.y = min(bounds.y, y - padding)
+    bounds.width = max(cur_max_x, x + padding) - bounds.x
+    bounds.height = max(cur_max_y, y + padding) - bounds.y

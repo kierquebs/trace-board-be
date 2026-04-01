@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import defaultdict
 
+from .geometry import compute_part_geometry
 from .models import (
     BoundingBox,
     ParsedBoard,
@@ -226,6 +228,17 @@ def _parse_text(text: str) -> ParsedBoard:  # noqa: C901
             continue
 
     # ------------------------------------------------------------------
+    # Compute geometry for each part
+    # ------------------------------------------------------------------
+    part_pin_positions: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for pin in pins:
+        part_pin_positions[pin.part_id].append((pin.position.x, pin.position.y))
+
+    for part in parts:
+        positions = part_pin_positions.get(part.id, [])
+        part.geometry = compute_part_geometry(part.name, positions)
+
+    # ------------------------------------------------------------------
     # Derive bounding box from part positions if outline missing
     # ------------------------------------------------------------------
     if not outline and parts:
@@ -263,7 +276,7 @@ def _normalise_net_name(name: str) -> str:
     return name.strip().upper() if name.strip() not in ("", "?", "---", "NC") else ""
 
 
-def _expand_bounds(bounds: BoundingBox, x: float, y: float, padding: float = 20.0) -> None:
+def _expand_bounds(bounds: BoundingBox, x: float, y: float, padding: float = 0.0) -> None:
     """Grow a part's bounding box to include a new pin position."""
     if bounds.width == 0 and bounds.height == 0:
         return  # First pin sets anchor — bounds will be set from x,y delta

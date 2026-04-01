@@ -22,9 +22,11 @@ import csv
 import io
 import logging
 import subprocess
+from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from .geometry import compute_part_geometry
 from .models import (
     BoundingBox,
     ParsedBoard,
@@ -211,6 +213,17 @@ def _parse_mdb(file_bytes: bytes, filename: str) -> ParsedBoard:  # noqa: C901
             net_map[net_id].nail_ids.append(nail_id)
 
     # ------------------------------------------------------------------
+    # Compute geometry for each part
+    # ------------------------------------------------------------------
+    part_pin_positions: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for pin in pins:
+        part_pin_positions[pin.part_id].append((pin.position.x, pin.position.y))
+
+    for part in parts:
+        positions = part_pin_positions.get(part.id, [])
+        part.geometry = compute_part_geometry(part.name, positions)
+
+    # ------------------------------------------------------------------
     # Compute board dimensions
     # ------------------------------------------------------------------
     board_width = 0.0
@@ -239,7 +252,7 @@ def _parse_mdb(file_bytes: bytes, filename: str) -> ParsedBoard:  # noqa: C901
     )
 
 
-def _expand_bounds(bounds: BoundingBox, x: float, y: float, padding: float = 20.0) -> None:
+def _expand_bounds(bounds: BoundingBox, x: float, y: float, padding: float = 0.0) -> None:
     if bounds.width == 0 and bounds.height == 0:
         bounds.x = x - padding
         bounds.y = y - padding
