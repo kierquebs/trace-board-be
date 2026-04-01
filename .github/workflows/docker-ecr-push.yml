@@ -13,6 +13,7 @@ jobs:
   build-and-push:
     name: Build and push Docker image to ECR
     runs-on: ubuntu-latest
+    environment: dev
     permissions:
       contents: read
 
