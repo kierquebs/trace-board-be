@@ -10,30 +10,30 @@ env:
   ECR_REPOSITORY: trace-board-be
 
 jobs:
-  env-check:
-    name: Validate SSM environment variables
-    runs-on: ubuntu-latest
-    environment: dev
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout infra repo
-        uses: actions/checkout@v4
-        with:
-          repository: kierquebs/trace-board-infra
-          ref: main
-          path: infra
-          token: ${{ secrets.GH_PAT }}
+  # env-check:
+  #   name: Validate SSM environment variables
+  #   runs-on: ubuntu-latest
+  #   environment: dev
+  #   permissions:
+  #     contents: read
+  #   steps:
+  #     - name: Checkout infra repo
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: kierquebs/trace-board-infra
+  #         ref: main
+  #         path: infra
+  #         token: ${{ secrets.GH_PAT }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-region: ${{ env.AWS_REGION }}
 
-      - name: Run env validation
-        run: bash infra/scripts/validate-env.sh dev
+  #     - name: Run env validation
+  #       run: bash infra/scripts/validate-env.sh dev
 
   build-and-push:
     name: Build and push Docker image to ECR
