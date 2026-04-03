@@ -23,6 +23,7 @@ jobs:
           repository: kierquebs/trace-board-infra
           ref: main
           path: infra
+          token: ${{ secrets.GH_PAT }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
