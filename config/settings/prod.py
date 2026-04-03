@@ -31,6 +31,7 @@ DATABASES = {
 # Redis — AWS ElastiCache
 # ---------------------------------------------------------------------------
 REDIS_URL = os.environ["REDIS_URL"]
+REDIS_SSL_CERT_REQS = os.environ.get("REDIS_SSL_CERT_REQS", None)
 
 CACHES = {
     "default": {
@@ -38,13 +39,22 @@ CACHES = {
         "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "CONNECTION_POOL_KWARGS": {"max_connections": 50},
+            "CONNECTION_POOL_KWARGS": {
+                "max_connections": 50,
+                "ssl_cert_reqs": REDIS_SSL_CERT_REQS
+                },
         },
     }
 }
 
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL")
+if CELERY_BROKER_URL and CELERY_BROKER_URL.startswith("rediss://"):
+    # Append the required SSL certificate requirement parameter
+    if "ssl_cert_reqs" not in CELERY_BROKER_URL:
+        separator = "&" if "?" in CELERY_BROKER_URL else "?"
+        CELERY_BROKER_URL += f"{separator}ssl_cert_reqs=none" # Use 'required' for production with CA certs
+
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 
 # ---------------------------------------------------------------------------
 # Security
