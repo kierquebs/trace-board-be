@@ -39,7 +39,7 @@ jobs:
     name: Build and push Docker image to ECR
     runs-on: ubuntu-latest
     environment: dev
-    needs: [env-check]
+    # needs: [env-check]
     permissions:
       contents: read
 
