@@ -59,12 +59,16 @@ CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False  # Handled by ALB
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://trace-board-dev-alb-138337456.ap-southeast-1.elb.amazonaws.com",
+]
 
 # ---------------------------------------------------------------------------
 # CORS — only the production frontend
